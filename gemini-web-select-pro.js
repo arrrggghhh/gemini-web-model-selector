@@ -10,6 +10,8 @@
 // @license      MIT
 // ==/UserScript==
 
+// 원본: https://greasyfork.org/en/scripts/564627-gemini-auto-select-pro-permanent-watcher
+
 (function() {
     'use strict';
 
