@@ -1,38 +1,30 @@
 // ==UserScript==
-// @name        Gemini Auto-Select (Smart High-Tier)
-// @namespace   http://tampermonkey.net/
-// @version     2.3
-// @description Automatically selects the preferred model only if neither Pro nor Thinking is active.
-// @author      You
-// @match       https://gemini.google.com/*
-// @grant       none
-// @run-at      document-idle
-// @license     MIT
+// @name         Gemini Auto-Select (Only from Flash)
+// @namespace    http://tampermonkey.net/
+// @version      5.1
+// @description  Flash(빠른) 모드일 때만 감지하여 사고(Thinking) 또는 Pro 모드로 전환합니다. (Pro나 사고 모드일 땐 유지)
+// @author       You
+// @match        https://gemini.google.com/*
+// @grant        none
+// @run-at       document-idle
+// @license      MIT
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // ==========================================
-    // [설정] Flash 상태일 때 전환할 목표 모드
-    // 'PRO'      : Pro 모델
-    // 'THINKING' : 사고 모드 (Gemini 2.0 Flash Thinking)
+    // [설정 1] 전환하고 싶은 '목표' 모드 키워드
+    // 여기에 있는 단어가 포함된 메뉴를 찾아 클릭합니다.
     // ==========================================
-    const PREFERRED_MODE = 'THINKING'; 
+    const TARGET_KEYWORDS = ["사고", "Thinking", "Reasoning"];
+    // const TARGET_KEYWORDS = ["Pro", "Advanced"]; // Pro로 가고 싶으면 주석 해제 후 위 줄 주석 처리
+
     // ==========================================
-
-
-    // 모드별 설정값
-    const MODE_CONFIG = {
-        'PRO': {
-            keywords: ["Pro", "Advanced", "Ultra"],
-            btnId: 'bard-mode-option-pro'
-        },
-        'THINKING': {
-            keywords: ["사고 모드", "Thinking", "Reasoning"],
-            btnId: 'bard-mode-option-사고모드' 
-        }
-    };
+    // [설정 2] '탈출'하고 싶은 모드 키워드 (Flash/빠른 모드)
+    // 현재 상태가 이 단어를 포함할 때만 전환을 시도합니다.
+    // ==========================================
+    const FLASH_KEYWORDS = ["빠른", "Flash"];
 
     const CHECK_INTERVAL_MS = 2000;
     let isSwitching = false;
@@ -40,64 +32,58 @@
     function checkAndSwitchModel() {
         if (isSwitching) return;
 
-        const config = MODE_CONFIG[PREFERRED_MODE];
-        if (!config) {
-            console.error("Gemini Auto-Switcher: 잘못된 설정입니다. PREFERRED_MODE를 확인하세요.");
-            return;
-        }
-
         // 1. 모델 선택 버튼 찾기
-        const pickerWrapper = document.querySelector('div[data-test-id="bard-mode-menu-button"]');
-        const pickerBtn = pickerWrapper ? pickerWrapper.querySelector('button') : null;
+        const pickerBtn = document.querySelector('bard-mode-switcher button[aria-haspopup="menu"]');
+        if (!pickerBtn) return; // 로딩 전
 
-        if (!pickerBtn) return;
-
-        // 2. 현재 선택된 모델 확인
+        // 2. 현재 상태 확인
         const currentLabel = pickerBtn.innerText.trim();
 
-        // [수정된 로직]
-        // 현재 상태가 'Pro' 계열이거나 'Thinking' 계열이면 변경하지 않음
-        const isProActive = MODE_CONFIG['PRO'].keywords.some(keyword => currentLabel.includes(keyword));
-        const isThinkingActive = MODE_CONFIG['THINKING'].keywords.some(keyword => currentLabel.includes(keyword));
+        // 2-1. 현재 모드가 'Flash(빠른)' 모드인지 확인
+        // (Flash가 아니라면 Pro든 Thinking이든 건드리지 않고 함수 종료)
+        const isFlashMode = FLASH_KEYWORDS.some(keyword => currentLabel.toLowerCase().includes(keyword.toLowerCase()));
 
-        if (isProActive || isThinkingActive) {
-            // 이미 고성능 모델(Pro 또는 Thinking)이 선택되어 있으므로 아무 작업도 하지 않음
-            return;
+        if (!isFlashMode) {
+            return; // Flash 모드가 아니므로 아무것도 하지 않음 (Pro/Thinking 유지)
         }
 
-        // 3. 변경 프로세스 시작 (Flash 등 하위 모델일 경우에만 실행)
+        // 3. 전환 시작 (Flash 모드임이 확인됨)
         isSwitching = true;
-        console.log(`Gemini Auto-Switcher: 현재 '${currentLabel}'. 고성능 모델이 아니므로 '${PREFERRED_MODE}' 모드로 전환 시도...`);
+        console.log(`[Gemini Auto] 현재 '${currentLabel}' 감지. 타겟 모드(${TARGET_KEYWORDS[0]})로 전환 시도...`);
 
-        pickerBtn.click();
+        pickerBtn.click(); // 메뉴 열기
 
-        setTimeout(() => {
-            // 4. 목표 버튼 찾기 (ID 우선 검색)
-            // 참고: 구글이 ID를 자주 변경하므로 data-test-id가 없을 경우 텍스트 매칭으로 넘어갑니다.
-            let targetItem = document.querySelector(`button[data-test-id="${config.btnId}"]`);
+        // 4. 메뉴가 열릴 때까지 기다렸다가 항목 클릭
+        let attempts = 0;
+        const menuCheckInterval = setInterval(() => {
+            attempts++;
 
-            // ID로 못 찾을 경우 텍스트로 백업 검색
-            if (!targetItem) {
-                const menuItems = document.querySelectorAll('div[role="menu"] button');
-                for (let item of menuItems) {
-                    if (config.keywords.some(keyword => item.innerText.includes(keyword))) {
-                        targetItem = item;
-                        break;
-                    }
+            // 메뉴 아이템 찾기 (role="menuitemradio")
+            const menuItems = document.querySelectorAll('div[role="menu"] button[role="menuitemradio"]');
+            let targetItem = null;
+
+            // 목표 키워드(사고/Pro)가 포함된 메뉴 찾기
+            for (let item of menuItems) {
+                const text = item.innerText;
+                if (TARGET_KEYWORDS.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()))) {
+                    targetItem = item;
+                    break;
                 }
             }
 
             if (targetItem) {
                 targetItem.click();
-                console.log(`Gemini Auto-Switcher: ${PREFERRED_MODE} 선택 완료.`);
-            } else {
-                console.log(`Gemini Auto-Switcher: 메뉴에서 ${PREFERRED_MODE} 버튼을 찾을 수 없습니다.`);
-                document.body.click(); // 메뉴 닫기 (빈 공간 클릭)
+                console.log(`[Gemini Auto] 전환 완료!`);
+                clearInterval(menuCheckInterval);
+                setTimeout(() => { isSwitching = false; }, 1000);
+            } else if (attempts > 10) {
+                // 2초간 못 찾으면(네트워크 지연, 혹은 해당 계정에 기능 없음 등) 포기
+                console.log("[Gemini Auto] 목표 메뉴를 찾을 수 없어 취소합니다.");
+                document.body.click(); // 메뉴 닫기
+                clearInterval(menuCheckInterval);
+                isSwitching = false;
             }
-
-            isSwitching = false;
-
-        }, 500);
+        }, 200);
     }
 
     setInterval(checkAndSwitchModel, CHECK_INTERVAL_MS);
