@@ -33,6 +33,8 @@ const TARGET_KEYWORDS = ["사고", "Thinking", "Reasoning"];
 const TARGET_KEYWORDS = ["Pro", "Advanced"];
 ```
 
+수정 후 `Ctrl+S`로 저장
+
 ### 동작 방식
 - 2초 간격으로 현재 모델 상태 확인
 - Flash 모드(`빠른`, `Flash`) 감지 시 자동으로 목표 모드로 전환
