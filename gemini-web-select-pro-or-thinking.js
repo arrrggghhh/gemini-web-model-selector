@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Gemini Auto-Select (Only from Flash) + Auto Focus
+// @name         Gemini Auto-Select (Only from Flash) + Auto Focus (Enterprise Fix)
 // @namespace    http://tampermonkey.net/
-// @version      5.2
-// @description  Flash(빠른) 모드일 때만 감지하여 사고(Thinking) 또는 Pro 모드로 전환하고 입력창에 포커스를 둡니다.
+// @version      6.0
+// @description  Flash 모드 감지 시 Thinking/Pro로 전환 후, 입력창 포커스를 확실하게 잡습니다 (기업용 계정 호환).
 // @author       You
 // @match        https://gemini.google.com/*
 // @grant        none
@@ -13,40 +13,69 @@
 (function() {
     'use strict';
 
-    // ==========================================
-    // [설정 1] 전환하고 싶은 '목표' 모드 키워드
-    // ==========================================
+    // [설정 1] 목표 모드 키워드
     const TARGET_KEYWORDS = ["사고", "Thinking", "Reasoning"];
     // const TARGET_KEYWORDS = ["Pro", "Advanced"];
 
-    // ==========================================
-    // [설정 2] '탈출'하고 싶은 모드 키워드 (Flash/빠른 모드)
-    // ==========================================
+    // [설정 2] 탈출 대상 모드 (Flash)
     const FLASH_KEYWORDS = ["빠른", "Flash"];
 
     const CHECK_INTERVAL_MS = 2000;
     let isSwitching = false;
 
-    // [추가 기능] 입력창 포커스 함수
-    function focusInput() {
-        // 사용자 힌트 기반 선택자 (v2 -> rich-textarea -> editable div)
-        const selectors = [
-            'input-area-v2 rich-textarea div[contenteditable="true"]', // 1순위: 정확한 경로
-            'div[role="textbox"]',                                     // 2순위: 접근성 표준
-            'rich-textarea'                                            // 3순위: 래퍼 자체
-        ];
+    // [핵심 기능] 커서를 맨 끝으로 이동시키는 함수
+    function setCaretToEnd(targetElem) {
+        const range = document.createRange();
+        const sel = window.getSelection();
+        
+        // 텍스트 노드가 없어도 강제로 포커싱
+        range.selectNodeContents(targetElem);
+        range.collapse(false); // false = 끝점으로 이동
+        
+        sel.removeAllRanges();
+        sel.addRange(range);
+        
+        targetElem.focus();
+    }
 
-        for (let sel of selectors) {
-            const inputEl = document.querySelector(sel);
+    // [핵심 기능] 강력한 입력창 포커스 함수 (재시도 로직 포함)
+    function attemptFocus(maxRetries = 10) {
+        let attempts = 0;
+
+        const focusInterval = setInterval(() => {
+            attempts++;
+            
+            // 선택자 우선순위
+            // 1. role="textbox" (접근성 표준, 가장 정확함)
+            // 2. contenteditable="true" (일반적인 편집 영역)
+            const inputEl = document.querySelector('div[role="textbox"]') || 
+                            document.querySelector('div[contenteditable="true"]');
+
             if (inputEl) {
-                inputEl.focus();
-                // 필요 시 커서를 끝으로 이동시키는 로직이 들어갈 수 있으나,
-                // 보통 focus()만으로도 입력 준비 상태가 됩니다.
-                console.log(`[Gemini Auto] 입력창 포커스 성공 (${sel})`);
-                return;
+                // 요소가 보이고 상호작용 가능한지 체크 (간단한 offsetParent 체크)
+                if (inputEl.offsetParent !== null) {
+                    try {
+                        setCaretToEnd(inputEl);
+                        console.log(`[Gemini Auto] 입력창 포커스 성공 (시도 ${attempts}회차)`);
+                        
+                        // 포커스가 실제로 들어갔는지 확인 (document.activeElement)
+                        if (document.activeElement === inputEl) {
+                            clearInterval(focusInterval);
+                            isSwitching = false; // 스위칭 상태 해제
+                            return;
+                        }
+                    } catch (e) {
+                        console.warn("[Gemini Auto] 포커스 시도 중 에러:", e);
+                    }
+                }
             }
-        }
-        console.log("[Gemini Auto] 입력창을 찾을 수 없습니다.");
+
+            if (attempts >= maxRetries) {
+                console.log("[Gemini Auto] 입력창 포커스 실패 (시간 초과)");
+                clearInterval(focusInterval);
+                isSwitching = false;
+            }
+        }, 200); // 0.2초 간격으로 체크
     }
 
     function checkAndSwitchModel() {
@@ -58,17 +87,13 @@
 
         // 2. 현재 상태 확인
         const currentLabel = pickerBtn.innerText.trim();
-
-        // 2-1. Flash 모드인지 확인
         const isFlashMode = FLASH_KEYWORDS.some(keyword => currentLabel.toLowerCase().includes(keyword.toLowerCase()));
 
-        if (!isFlashMode) {
-            return;
-        }
+        if (!isFlashMode) return;
 
         // 3. 전환 시작
         isSwitching = true;
-        console.log(`[Gemini Auto] 현재 '${currentLabel}' 감지. 타겟 모드(${TARGET_KEYWORDS[0]})로 전환 시도...`);
+        console.log(`[Gemini Auto] 감지: ${currentLabel} -> 전환 시도: ${TARGET_KEYWORDS[0]}`);
 
         pickerBtn.click(); // 메뉴 열기
 
@@ -89,24 +114,23 @@
 
             if (targetItem) {
                 targetItem.click();
-                console.log(`[Gemini Auto] 전환 완료!`);
+                console.log(`[Gemini Auto] 메뉴 클릭 완료`);
                 clearInterval(menuCheckInterval);
 
-                // [변경됨] 전환 후 입력창 포커스 시도 (UI 갱신 시간을 고려해 약간 지연)
+                // [중요] 메뉴 클릭 직후에는 DOM이 리프레시되므로 약간의 딜레이 후 '반복 시도' 시작
                 setTimeout(() => {
-                    focusInput();
-                    isSwitching = false;
-                }, 500);
+                    attemptFocus(15); // 최대 15번(약 3초)까지 포커스 시도
+                }, 300);
 
             } else if (attempts > 10) {
-                console.log("[Gemini Auto] 목표 메뉴를 찾을 수 없어 취소합니다.");
-                document.body.click(); // 메뉴 닫기
+                console.log("[Gemini Auto] 메뉴를 찾을 수 없어 취소");
+                document.body.click(); // 메뉴 닫기 시도
                 clearInterval(menuCheckInterval);
                 isSwitching = false;
             }
         }, 200);
     }
 
+    // 주기적 감시 시작
     setInterval(checkAndSwitchModel, CHECK_INTERVAL_MS);
-
 })();
