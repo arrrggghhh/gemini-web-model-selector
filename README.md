@@ -11,7 +11,7 @@ Chrome 웹 스토어에서 [Tampermonkey](https://chrome.google.com/webstore/det
 1. 크롬 주소창에 `chrome://extensions` 입력
 2. **개발자 모드** 활성화 (우측 상단 토글)
 3. Tampermonkey 확장에서 **세부정보** 클릭
-4. **파일 URL에 대한 액세스 허용** 활성화 (선택사항)
+4. **사용자 스크립트 허용** 활성화 (필수)
 
 ### 3. 스크립트 등록
 1. Tampermonkey 아이콘 클릭 → **새 스크립트 만들기**
