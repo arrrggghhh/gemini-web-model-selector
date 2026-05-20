@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gemini Auto-Select Model + Auto Focus
 // @namespace    http://tampermonkey.net/
-// @version      7.1
-// @description  Gemini 새 UI에서 빠른 모델/사고 모델/Pro를 감지해 지정 모델로 자동 전환하고 입력창 포커스를 복구합니다.
+// @version      7.2
+// @description  Gemini 새 UI에서 Flash-Lite/Flash/Pro를 감지해 지정 모델로 자동 전환하고 입력창 포커스를 복구합니다.
 // @author       You
 // @match        https://gemini.google.com/*
 // @grant        none
@@ -16,13 +16,13 @@
     /**
      * 목표 모델 설정
      *
-     * 사고 모델로 자동 선택:
-     *   const TARGET_MODEL = 'thinking';
+     * 중간 Flash 모델로 자동 선택:
+     *   const TARGET_MODEL = 'medium';
      *
      * Pro로 자동 선택:
      *   const TARGET_MODEL = 'pro';
      */
-    const TARGET_MODEL = 'thinking'; // 'thinking' | 'pro'
+    const TARGET_MODEL = 'medium'; // 'medium' | 'pro' | 'thinking'(legacy alias)
 
     const CHECK_INTERVAL_MS = 1500;
     const MENU_WAIT_TIMEOUT_MS = 4000;
@@ -30,24 +30,24 @@
     const DEBUG = true;
 
     const RANK = {
-        fast: 0,
-        thinking: 1,
+        low: 0,
+        medium: 1,
         pro: 2,
         ultra: 3,
     };
 
     const TARGET_KEYWORDS = {
-        thinking: [
-            '사고 모델',
-            '사고',
-            'Thinking',
-            'Reasoning',
-            '복잡한 문제',
+        medium: [
+            '3.5 Flash',
+            'Gemini 3.5 Flash',
+            'Flash',
+            '무엇이든 도움을 받으세요',
         ],
         pro: [
+            '3.1 Pro',
+            'Gemini 3.1 Pro',
             'Pro',
             '프로',
-            'Advanced',
             '고급 수학',
             '고급 수학 및 코딩',
         ],
@@ -115,6 +115,13 @@
 
         if (!t) return null;
 
+        const hasFlashLite =
+            /\bflash[\s-]*lite\b/i.test(original) ||
+            t.includes('flash-lite') ||
+            t.includes('flash lite');
+
+        const hasFlash = /\bflash\b/i.test(original) || t.includes('플래시');
+
         // 높은 등급부터 판정합니다.
         // Pro 설명에 "고급" 같은 단어가 들어가므로 순서가 중요합니다.
         if (
@@ -126,6 +133,7 @@
         }
 
         if (
+            /\b\d+(?:\.\d+)?\s*pro\b/i.test(original) ||
             /\bpro\b/i.test(original) ||
             t.includes('프로') ||
             t.includes('advanced') ||
@@ -136,37 +144,57 @@
         }
 
         if (
+            hasFlashLite ||
+            t.includes('빠른') ||
+            t.includes('fast') ||
+            t.includes('빠르게 답변')
+        ) {
+            return RANK.low;
+        }
+
+        if (
+            hasFlash ||
+            t.includes('무엇이든 도움을 받으세요') ||
             t.includes('사고') ||
             t.includes('thinking') ||
             t.includes('reasoning') ||
             t.includes('복잡한 문제')
         ) {
-            return RANK.thinking;
-        }
-
-        if (
-            t.includes('빠른') ||
-            t.includes('flash') ||
-            t.includes('fast') ||
-            t.includes('빠르게 답변')
-        ) {
-            return RANK.fast;
+            return RANK.medium;
         }
 
         return null;
     }
 
+    function getTargetModel() {
+        if (TARGET_MODEL === 'thinking') return 'medium';
+        return TARGET_MODEL;
+    }
+
     function getTargetRank() {
-        if (TARGET_MODEL === 'thinking') return RANK.thinking;
-        if (TARGET_MODEL === 'pro') return RANK.pro;
+        const targetModel = getTargetModel();
+
+        if (targetModel === 'medium') return RANK.medium;
+        if (targetModel === 'pro') return RANK.pro;
 
         throw new Error(`지원하지 않는 TARGET_MODEL: ${TARGET_MODEL}`);
+    }
+
+    function getTargetKeywords() {
+        const targetModel = getTargetModel();
+        const keywords = TARGET_KEYWORDS[targetModel];
+
+        if (!keywords) {
+            throw new Error(`지원하지 않는 TARGET_MODEL: ${TARGET_MODEL}`);
+        }
+
+        return keywords;
     }
 
     function matchesTargetText(text) {
         const t = normalize(text);
 
-        return TARGET_KEYWORDS[TARGET_MODEL].some(keyword =>
+        return getTargetKeywords().some(keyword =>
             t.includes(normalize(keyword))
         );
     }
@@ -205,10 +233,15 @@
     function findModelButton() {
         const selectors = [
             'button[data-test-id="bard-mode-menu-button"]',
+            'button[aria-label="모드 선택 도구 열기"]',
             'button.input-area-switch[aria-haspopup="menu"]',
+            'button.input-area-switch[aria-haspopup="true"]',
             'button[aria-label*="모드 선택"][aria-haspopup="menu"]',
+            'button[aria-label*="모드 선택"][aria-haspopup="true"]',
             'button[aria-label*="mode"][aria-haspopup="menu"]',
+            'button[aria-label*="mode"][aria-haspopup="true"]',
             'bard-mode-switcher button[aria-haspopup="menu"]',
+            'bard-mode-switcher button[aria-haspopup="true"]',
         ];
 
         for (const selector of selectors) {
@@ -222,7 +255,7 @@
         // fallback: 텍스트가 모델명이고 메뉴를 여는 버튼
         const candidates = [
             ...document.querySelectorAll(
-                'button[aria-haspopup="menu"], [role="button"][aria-haspopup="menu"]'
+                'button[aria-haspopup="menu"], button[aria-haspopup="true"], [role="button"][aria-haspopup="menu"], [role="button"][aria-haspopup="true"]'
             ),
         ];
 
@@ -241,7 +274,9 @@
                 if (
                     aria.includes('옵션 더보기') ||
                     aria.includes('파일 업로드') ||
+                    aria.includes('업로드 및 도구') ||
                     aria.includes('settings') ||
+                    aria.includes('설정') ||
                     aria.includes('help')
                 ) {
                     return false;
@@ -266,21 +301,35 @@
         };
     }
 
+    function getControlledMenuRoot() {
+        const btn = findModelButton();
+        const controls = btn?.getAttribute('aria-controls');
+
+        if (!controls) return null;
+
+        const root = document.getElementById(controls);
+
+        return root && isVisible(root) ? root : null;
+    }
+
     function getOverlayRoots() {
         const roots = [
+            getControlledMenuRoot(),
             ...document.querySelectorAll(
                 [
                     '.cdk-overlay-container',
                     '.cdk-overlay-pane',
                     '.mat-mdc-menu-panel',
+                    'gem-popover',
+                    '[id^="ng-menu-"]',
                     '[role="menu"]',
                     '[role="listbox"]',
                     '[role="dialog"]',
                 ].join(',')
             ),
-        ].filter(isVisible);
+        ].filter(Boolean).filter(isVisible);
 
-        return roots.length ? roots : [document.body];
+        return [...new Set(roots)];
     }
 
     function getClickableMenuAncestor(el) {
@@ -301,6 +350,7 @@
 
     function findTargetMenuItem() {
         const roots = getOverlayRoots();
+        const targetKeywords = getTargetKeywords();
 
         const candidates = [];
         const seen = new Set();
@@ -350,7 +400,7 @@
                     length: normalize(clickText || rawText).length,
                     area: rect.width * rect.height,
                     exact: normalize(clickText || rawText).startsWith(
-                        normalize(TARGET_KEYWORDS[TARGET_MODEL][0])
+                        normalize(targetKeywords[0])
                     ),
                 });
             }
@@ -534,7 +584,7 @@
         isSwitching = true;
         lastSwitchStartedAt = now;
 
-        log(`전환 시작: "${current.label}" -> ${TARGET_MODEL}`);
+        log(`전환 시작: "${current.label}" -> ${getTargetModel()}`);
 
         clickOnce(current.btn);
 
@@ -543,7 +593,7 @@
     }
 
     function start() {
-        log(`시작됨. TARGET_MODEL=${TARGET_MODEL}`);
+        log(`시작됨. TARGET_MODEL=${TARGET_MODEL}, effective=${getTargetModel()}`);
 
         setInterval(checkAndSwitchModel, CHECK_INTERVAL_MS);
 
